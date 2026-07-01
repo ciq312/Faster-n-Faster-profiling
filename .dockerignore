@@ -1,0 +1,9 @@
+.git/
+.env
+profiling/
+loadtest/bin/
+loadtest/obj/
+**/__pycache__/
+Dockerfile
+.dockerignore
+README.md

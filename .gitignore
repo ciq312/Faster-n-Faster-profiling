@@ -1,2 +1,5 @@
 *.env
 .env
+
+# Generated graphs — rendered locally from the raw data, not stored in the repo
+*.png
