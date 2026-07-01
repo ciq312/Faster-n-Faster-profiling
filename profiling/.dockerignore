@@ -1,0 +1,8 @@
+*.csv
+*.json
+*.png
+graphs*
+OldTestsData/
+oldTest/
+Dockerfile
+.dockerignore

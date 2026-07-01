@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("loadtest")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+d6c28db4827f825c97afd79b46193ed33da8c43e")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+72fd0f9d90b70a6ca911908eb555da80792f8f12")]
 [assembly: System.Reflection.AssemblyProductAttribute("loadtest")]
 [assembly: System.Reflection.AssemblyTitleAttribute("loadtest")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

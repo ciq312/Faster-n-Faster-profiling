@@ -660,11 +660,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "D:\\Faster-n-Faster\\loadtest\\loadtest.csproj",
+      "projectUniqueName": "D:\\Faster'n'Faster-Tools\\loadtest\\loadtest.csproj",
       "projectName": "loadtest",
-      "projectPath": "D:\\Faster-n-Faster\\loadtest\\loadtest.csproj",
+      "projectPath": "D:\\Faster'n'Faster-Tools\\loadtest\\loadtest.csproj",
       "packagesPath": "C:\\Users\\Alexa\\.nuget\\packages\\",
-      "outputPath": "D:\\Faster-n-Faster\\loadtest\\obj\\",
+      "outputPath": "D:\\Faster'n'Faster-Tools\\loadtest\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\Alexa\\AppData\\Roaming\\NuGet\\NuGet.Config",

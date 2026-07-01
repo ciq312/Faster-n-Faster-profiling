@@ -4,6 +4,21 @@ import matplotlib.pyplot as plt
 import sys
 from pathlib import Path
 
+# dotnet-counters CSV columns. Newer versions emit the rows without a header line;
+# older captures include it. Detect and supply names when it's absent.
+COUNTER_COLUMNS = ["Timestamp", "Provider", "Counter Name", "Counter Type", "Mean/Increment"]
+
+
+def read_counters(path):
+    with open(path, "r") as f:
+        first_line = f.readline()
+    has_header = first_line.startswith("Timestamp,")
+    return pd.read_csv(
+        path,
+        header=0 if has_header else None,
+        names=None if has_header else COUNTER_COLUMNS,
+    )
+
 # =========================================================
 # CONFIG
 # =========================================================
@@ -48,7 +63,7 @@ if combined_mode:
 
     loaded = []
     for label, csv_p, phases_p in runs:
-        rdf = pd.read_csv(csv_p)
+        rdf = read_counters(csv_p)
         rdf["Timestamp"] = pd.to_datetime(
             rdf["Timestamp"], format="%m/%d/%Y %H:%M:%S"
         ).dt.tz_localize("UTC")
@@ -179,7 +194,7 @@ def draw_phase_markers(ax):
 # LOAD DATA
 # =========================================================
 
-df = pd.read_csv(CSV_FILE)
+df = read_counters(CSV_FILE)
 
 # Parse timestamps
 df["Timestamp"] = pd.to_datetime(

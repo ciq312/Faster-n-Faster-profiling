@@ -7,6 +7,9 @@ int users = 5;
 string server = "http://localhost:8080";
 bool insecure = false;
 int wpm = 120;
+// Where phases.json is written. Env var lets Docker point it at a mounted volume
+// without changing args; --out overrides. Defaults to the app dir (local runs).
+string outDir = Environment.GetEnvironmentVariable("LOADTEST_OUT") ?? AppContext.BaseDirectory;
 
 for (int i = 0; i < args.Length; i++)
 {
@@ -16,9 +19,10 @@ for (int i = 0; i < args.Length; i++)
         case "--server": server = args[++i]; break;
         case "--insecure": insecure = true; break;
         case "--wpm": wpm = int.Parse(args[++i]); break;
+        case "--out": outDir = args[++i]; break;
         case "-h":
         case "--help":
-            Console.WriteLine("loadtest --users N --server URL [--wpm 120] [--insecure]");
+            Console.WriteLine("loadtest --users N --server URL [--wpm 120] [--insecure] [--out DIR]");
             return 0;
     }
 }
@@ -149,7 +153,8 @@ var output = new
     phases,
     rtts = allRttSamples.Select(s => new { t = s.T, ms = s.Ms }).ToArray()
 };
-var jsonPath = Path.Combine(AppContext.BaseDirectory, "phases.json");
+Directory.CreateDirectory(outDir);
+var jsonPath = Path.Combine(outDir, "phases.json");
 await File.WriteAllTextAsync(jsonPath, JsonSerializer.Serialize(output));
 Console.WriteLine($"[7] Wrote {allRttSamples.Length} RTT samples + {phases.Count} phase markers to {jsonPath}");
 
