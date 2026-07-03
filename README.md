@@ -35,9 +35,7 @@ the phase markers (`auth`, `join`, `passage_ready`, `race_started`, `race_ended`
 | Path | What it is |
 |------|-----------|
 | `automation.py`        | Orchestrator. Drives the server over SSH ([Fabric](https://www.fabfile.org/)) and graphs locally. |
-| `loadtest/`            | .NET 10 console app that spawns the bot swarm against the backend. |
-| `loadtest/Program.cs`  | Run flow: auth → connect → lobby → race → type → stats → `phases.json`. |
-| `loadtest/LoadTestBot.cs` | A single simulated player (HTTP auth + SignalR hub client). |
+| [`loadtest/`](https://github.com/ciq312/Faster-n-Faster/tree/main/loadtest) | The bot swarm itself — lives in the **main repo**; the orchestrator builds it on the server from `REMOTE_REPO/loadtest`. `Program.cs`: auth → connect → lobby → race → type → stats → `phases.json`. `LoadTestBot.cs`: a single simulated player (HTTP auth + SignalR hub client). |
 | `profiling/`           | `profiler.py` — turns `counters.csv` + `phases.json` into graphs (pandas + matplotlib). |
 | `profiling/<label>/`   | Raw data + generated graphs for a given run. |
 | `Dockerfile`           | Packages the orchestrator (`automation.py`). |
@@ -114,13 +112,14 @@ Raw data and graphs land in `profiling/200UsersProdFix/`.
 
 ### Load test only
 
-The load test runs **anywhere** — you don't need the SSH orchestrator. Point `--server` at whatever
-backend you want to hit: a local instance (`http://localhost:8080`) or production
-(`https://faster-n-faster.com`). The only requirement for collecting metrics is having
+The load test runs **anywhere** — you don't need the SSH orchestrator. Its source lives in the
+[main repo's `loadtest/`](https://github.com/ciq312/Faster-n-Faster/tree/main/loadtest). Point
+`--server` at whatever backend you want to hit: a local instance (`http://localhost:8080`) or
+production (`https://faster-n-faster.com`). The only requirement for collecting metrics is having
 `dotnet-counters` available on whichever backend you're profiling.
 
 ```bash
-docker build -t loadtest ./loadtest
+docker build -t loadtest <path-to-Faster-n-Faster>/loadtest
 docker run --rm --network host \
   -e LOADTEST_OUT=/out -v "$PWD/out:/out" \
   loadtest --users 100 --server http://localhost:8080 --wpm 120 --out /out

@@ -3,3 +3,6 @@
 
 # Generated graphs — rendered locally from the raw data, not stored in the repo
 *.png
+# Python
+__pycache__/
+*.pyc
