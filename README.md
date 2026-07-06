@@ -4,6 +4,11 @@ Tooling to **load-test and profile the [Faster'n'Faster](https://faster-n-faster
 simulating hundreds to thousands of concurrent typing-race players and correlating the resulting
 server load against the phases of a run.
 
+Check the graphs for 1000 users loadtest
+at profiling\1000users200msMinimizeAllocations2
+
+![alt text](profiling/1000users200msMinimizeAllocations2/graphscounters.csv/threadpool_queue.png)
+
 Each simulated player ("bot") authenticates, opens a **SignalR** hub connection, joins a lobby,
 receives a passage, and types it out at a configurable words-per-minute rate while its round-trip
 latency is sampled. In parallel, `dotnet-counters` records runtime metrics (CPU, memory, GC,
