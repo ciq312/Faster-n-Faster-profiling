@@ -3,7 +3,8 @@
 
 # Generated graphs — rendered locally from the raw data, not stored in the repo
 *.png
-!profiling\1000users200msMinimizeAllocations2
+!profiling/1000users200msMinimizeAllocations3/graphscounters.csv/*.png
+
 # Python
 __pycache__/
 *.pyc
