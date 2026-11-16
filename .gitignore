@@ -9,3 +9,6 @@
 __pycache__/
 *.pyc
 
+
+# Locally generated profiling runs (historical tracked samples remain tracked)
+profiling/*/
