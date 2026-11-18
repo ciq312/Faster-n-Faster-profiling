@@ -1,150 +1,191 @@
-"""
-Load-test + profiling orchestrator.
-
-The server (fnf) does only what must happen there; graphs are built locally from
-the raw data, because they're derived artifacts you iterate on (metrics, overlays)
-and the server is the box under test. Pipeline for one invocation:
-
-  ON SERVER
-  1. build the loadtest image
-  2. start dotnet-counters inside the backend container
-  3. run the loadtest container to completion  -> writes phases.json
-     (its runtime is exactly the counter collection window)
-  4. stop counters, copy counters.csv out of the backend container
-
-  LOCAL
-  5. pull counters.csv + phases.json into profiling/<label>/
-  6. delete the temp run dir on the server
-  7. build + run the profiler image locally -> graphs next to the raw data
-
-Config comes from .env; run parameters from CLI. Example:
-
-  python automation.py --users 200 --label 200UsersProdFix --wpm 120
-"""
+"""Run the local profiling Compose stack and save metrics or a diagnostic trace."""
 
 import argparse
+import json
 import os
+import re
+import shutil
 import subprocess
-import time
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
 
-from dotenv import load_dotenv
-from fabric import Connection
-
-# ---------------------------------------------------------------------------
-# Config (env with sensible defaults)
-# ---------------------------------------------------------------------------
-load_dotenv()
-
-SERVER = os.getenv("SERVER_NAME", "fnf")
-REMOTE_REPO = os.getenv("REMOTE_REPO", "/opt/Faster-n-Faster")
-BACKEND_CONTAINER = os.getenv("BACKEND_CONTAINER", "backend")
-# URL the loadtest container uses to reach the backend, from on the server.
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8080")
-# Docker network for the loadtest container. "host" reaches published ports;
-# "container:backend" shares the backend's net namespace (localhost = backend).
-LOADTEST_NETWORK = os.getenv("LOADTEST_NETWORK", "host")
-COUNTERS = os.getenv("COUNTERS", "System.Runtime,Microsoft.AspNetCore.Hosting")
-
-LOADTEST_IMAGE = "loadtest"
-PROFILER_IMAGE = "profiler"
-
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
-
-# dotnet-counters is baked into the backend image at /opt/tools; collect on PID 1.
-COLLECT_METRICS_CMD = (
-    f"docker exec -d {BACKEND_CONTAINER} sh -c "
-    f"'/opt/tools/dotnet-counters collect -p 1 "
-    f"--format csv -o /tmp/counters.csv "
-    f"--counters {COUNTERS} "
-    f"& echo $! > /tmp/counters.pid'"
-)
-STOP_COLLECTING_METRICS_CMD = (
-    f"docker exec {BACKEND_CONTAINER} sh -c 'kill -INT $(cat /tmp/counters.pid)'"
-)
+from trace_report import convert_trace, write_trace_report
 
 
-def collect_on_server(conn, args, remote_dir):
-    """Steps 1-4: everything that must run on the box under test."""
-    conn.run(f"mkdir -p {remote_dir}")
-
-    print("[collect] starting dotnet-counters")
-    conn.run(COLLECT_METRICS_CMD)
-    time.sleep(args.preroll)  # baseline before load
-
-    # Loadtest runs in the foreground; this call blocks for the whole run, so the
-    # counter window brackets it. phases.json lands in the mounted temp dir.
-    insecure = " --insecure" if args.insecure else ""
-    print(f"[loadtest] {args.users} users @ {args.wpm} wpm -> {BACKEND_URL}")
-    conn.run(
-        f"docker run --rm --network {LOADTEST_NETWORK} "
-        f"-e LOADTEST_OUT=/out -v {remote_dir}:/out {LOADTEST_IMAGE} "
-        f"--users {args.users} --server {BACKEND_URL} --wpm {args.wpm}{insecure} --out /out"
-    )
-
-    time.sleep(args.postroll)  # let counters settle after load
-    print("[collect] stopping dotnet-counters")
-    conn.run(STOP_COLLECTING_METRICS_CMD)
-
-    print("[copy] counters.csv out of backend")
-    conn.run(f"docker cp {BACKEND_CONTAINER}:/tmp/counters.csv {remote_dir}/counters.csv")
+HERE = Path(__file__).resolve().parent
+DEFAULT_APP_REPO = HERE.parent / "Faster-n-Faster"
+TRACE_TOOL_VERSION = "10.0.750501"
+TRACE_PROFILE = "dotnet-common,dotnet-sampled-thread-time"
 
 
-def graph_locally(local_dir):
-    """Steps 7: build + run the profiler image locally over the raw data."""
-    print("[graph] building profiler image")
-    subprocess.run(
-        ["docker", "build", "-t", PROFILER_IMAGE, os.path.join(REPO_ROOT, "profiling")],
-        check=True,
-    )
-    print("[graph] rendering graphs")
-    # List form -> no shell quoting; the apostrophe in the repo path is safe.
-    subprocess.run(
-        ["docker", "run", "--rm", "-w", "/data", "-v", f"{local_dir}:/data",
-         PROFILER_IMAGE, "counters.csv", "phases.json"],
-        check=True,
-    )
+def run(command, *, env=None, check=True):
+    print("$", " ".join(map(str, command)), flush=True)
+    return subprocess.run(command, cwd=HERE, env=env, check=check)
+
+
+def convert_in_diagnostics(trace_path, compose, env):
+    image = subprocess.run(
+        [*compose, "config", "--images", "diagnostics"],
+        cwd=HERE, env=env, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    if not image:
+        raise ValueError("could not resolve the diagnostics image")
+
+    def run_converter(output):
+        run(["docker", "run", "--rm", "--pull", "never", "--network", "none", "--user", f"{os.getuid()}:{os.getgid()}",
+             "--volume", f"{trace_path.parent}:/traces:z", "--entrypoint", "/tools/dotnet-trace", image,
+             "convert", f"/traces/{trace_path.name}", "--format", "Speedscope",
+             "--output", f"/traces/{output.relative_to(trace_path.parent)}"], env=env)
+
+    convert_trace(trace_path, run_converter)
 
 
 def main():
-    p = argparse.ArgumentParser(description="Load-test + profiling orchestrator")
-    p.add_argument("--users", type=int, required=True)
-    p.add_argument("--label", help="run name / output subdir (default: <N>users)")
-    p.add_argument("--wpm", type=int, default=120)
-    p.add_argument("--insecure", action="store_true", help="skip TLS validation")
-    p.add_argument("--skip-build", action="store_true", help="reuse loadtest image on server")
-    p.add_argument("--keep-remote", action="store_true", help="don't delete the server temp dir")
-    p.add_argument("--no-graph", action="store_true", help="pull raw data only, skip graphing")
-    p.add_argument("--preroll", type=int, default=3, help="baseline seconds before load")
-    p.add_argument("--postroll", type=int, default=3, help="settle seconds after load")
-    args = p.parse_args()
-    if not args.label:
-        args.label = f"{args.users}users"
+    parser = argparse.ArgumentParser(description="Run local Docker profiling and graphs")
+    parser.add_argument("--users", type=int, required=True)
+    parser.add_argument("--label", help="output folder name (default: timestamp and user count)")
+    parser.add_argument("--wpm", type=int, default=120)
+    parser.add_argument("--app-repo", type=Path, default=DEFAULT_APP_REPO)
+    parser.add_argument("--project", default="fnf-profile")
+    parser.add_argument("--skip-build", action="store_true", help="reuse existing Compose images")
+    parser.add_argument("--no-graph", action="store_true", help="skip PNG graphs and Speedscope reports")
+    parser.add_argument("--trace", action="store_true", help="collect a diagnostic .nettrace instead of counters")
+    parser.add_argument("--trace-duration", default="00:00:00:45",
+                        help="trace duration in DD:HH:MM:SS format (default: 45 seconds)")
+    args = parser.parse_args()
+    if args.users < 1 or args.wpm < 1:
+        parser.error("--users and --wpm must be positive")
+    if args.trace and not re.fullmatch(r"\d{2}:\d{2}:\d{2}:\d{2}", args.trace_duration):
+        parser.error("--trace-duration must use DD:HH:MM:SS format")
 
-    remote_dir = f"/tmp/loadtest-{args.label}"
-    local_dir = os.path.join(REPO_ROOT, "profiling", args.label)
-    os.makedirs(local_dir, exist_ok=True)
+    app_repo = args.app_repo.expanduser().resolve()
+    compose_file = app_repo / "docker-compose.profiling.yml"
+    runs_dir = app_repo / "profiling-runs"
+    if not compose_file.is_file():
+        parser.error(f"profiling Compose file not found: {compose_file}")
 
-    with Connection(SERVER) as conn:
-        print(f"Connected to {SERVER}")
+    label = args.label or f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{args.users}users"
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", label):
+        parser.error("--label may contain only letters, numbers, dots, underscores and hyphens")
+    output = HERE / "profiling" / label
+    output.mkdir(parents=True, exist_ok=False)
+    trace_filename = f"trace-{label}.nettrace"
+
+    env = os.environ.copy()
+    env.update({
+        "PROFILE_UID": str(os.getuid()),
+        "PROFILE_GID": str(os.getgid()),
+        "PROFILE_USERS": str(args.users),
+        "PROFILE_WPM": str(args.wpm),
+        # Start dependencies in counters mode; the API is restarted before the
+        # selected collector is attached, clearing any prior EventPipe session.
+        "PROFILE_COLLECTOR": "counters",
+        "PROFILE_TRACE_DURATION": args.trace_duration,
+        "PROFILE_TRACE_FILE": trace_filename,
+    })
+    compose = ["docker", "compose", "--env-file", "/dev/null", "-p", args.project,
+               "-f", str(compose_file)]
+
+    def dc(*parts, check=True):
+        return run([*compose, *parts], env=env, check=check)
+
+    result = None
+    collector_result = None
+    setup_error = None
+    trace_report_failed = False
+    previous_runs = set()
+    try:
         if not args.skip_build:
-            print("[build] loadtest image")
-            conn.run(f"docker build -t {LOADTEST_IMAGE} {REMOTE_REPO}/loadtest")
+            dc("up", "--build", "-d", "api")
+        else:
+            dc("up", "-d", "api")
 
-        collect_on_server(conn, args, remote_dir)
+        dc("stop", "diagnostics", check=False)
+        dc("restart", "api")
+        previous_runs = {p.name for p in runs_dir.iterdir() if p.is_dir()} if runs_dir.exists() else set()
+        for stale in (runs_dir / "phases.json", runs_dir / "counters.csv", runs_dir / trace_filename):
+            stale.unlink(missing_ok=True)
+        env["PROFILE_COLLECTOR"] = "trace" if args.trace else "counters"
+        dc("up", "-d", "--force-recreate", "--wait", "diagnostics")
 
-        print(f"[pull] -> {local_dir}")
-        conn.get(f"{remote_dir}/counters.csv", local=os.path.join(local_dir, "counters.csv"))
-        conn.get(f"{remote_dir}/phases.json", local=os.path.join(local_dir, "phases.json"))
+        loadtest_args = ["run", "--rm", "loadtest"]
+        if not args.skip_build:
+            loadtest_args.insert(1, "--build")
+        result = dc(*loadtest_args, check=False)
+        if args.trace:
+            # A duration bound lets dotnet-trace flush a complete nettrace file.
+            collector_result = dc("wait", "diagnostics", check=False)
+    except subprocess.CalledProcessError as error:
+        setup_error = error
+        print(f"[!] Profiling setup or collector failed: {error}", file=sys.stderr)
+    finally:
+        dc("stop", "diagnostics", check=False)
 
-        if not args.keep_remote:
-            print("[cleanup] removing server temp dir")
-            conn.run(f"rm -rf {remote_dir}")
+    phases_source = runs_dir / "phases.json"
+    if phases_source.is_file():
+        shutil.copy2(phases_source, output / "phases.json")
 
-    if not args.no_graph:
-        graph_locally(local_dir)
+    run_dirs = sorted((p for p in runs_dir.iterdir()
+                       if p.is_dir() and p.name not in previous_runs),
+                      key=lambda p: p.stat().st_mtime, reverse=True) if runs_dir.exists() else []
+    if run_dirs:
+        shutil.copytree(run_dirs[0], output / "bot-run", dirs_exist_ok=True)
 
-    print(f"Done. Raw data + graphs in {local_dir}")
+    if args.trace:
+        trace_source = runs_dir / trace_filename
+        if trace_source.is_file() and trace_source.stat().st_size > 0:
+            traces_dir = output / "traces"
+            traces_dir.mkdir()
+            trace_path = traces_dir / trace_filename
+            shutil.copy2(trace_source, trace_path)
+            (output / "trace-metadata.json").write_text(json.dumps({
+                "schemaVersion": 1,
+                "tool": f"dotnet-trace {TRACE_TOOL_VERSION}",
+                "profile": TRACE_PROFILE,
+                "duration": args.trace_duration,
+                "trace": f"traces/{trace_filename}",
+                "loadtestExitCode": result.returncode if result else None,
+            }, indent=2) + "\n")
+            if not args.no_graph and collector_result is not None and collector_result.returncode == 0:
+                try:
+                    convert_in_diagnostics(trace_path, compose, env)
+                    write_trace_report(trace_path, output / "phases.json")
+                except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
+                    trace_report_failed = True
+                    print(f"[!] Could not build the Speedscope report: {error}", file=sys.stderr)
+        else:
+            print("[!] Trace file is missing or empty.", file=sys.stderr)
+    else:
+        counters_source = runs_dir / "counters.csv"
+        if counters_source.is_file():
+            shutil.copy2(counters_source, output / "counters.csv")
+
+        if not (output / "counters.csv").is_file() or not (output / "counters.csv").stat().st_size:
+            print("[!] counters.csv is missing or empty.", file=sys.stderr)
+        elif not args.no_graph:
+            profiler_dir = HERE / "profiling"
+            run(["docker", "build", "-t", "fnf-profiler", str(profiler_dir)])
+            run(["docker", "run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}",
+                 "-w", "/data", "-v", f"{output}:/data:z",
+                 "fnf-profiler", "counters.csv", "phases.json"])
+
+    print(f"Artifacts: {output}")
+    if setup_error:
+        return setup_error.returncode or 1
+    if result is None or result.returncode != 0:
+        return result.returncode if result else 1
+    if collector_result and collector_result.returncode != 0:
+        return collector_result.returncode
+    if args.trace and not (output / "traces" / trace_filename).is_file():
+        return 1
+    if trace_report_failed:
+        return 1
+    if not args.trace and (not (output / "counters.csv").is_file()
+                           or not (output / "counters.csv").stat().st_size):
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

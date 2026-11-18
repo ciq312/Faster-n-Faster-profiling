@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import sys
 from pathlib import Path
+from matplotlib.lines import Line2D
 
 # dotnet-counters CSV columns. Newer versions emit the rows without a header line;
 # older captures include it. Detect and supply names when it's absent.
@@ -18,6 +19,43 @@ def read_counters(path):
         header=0 if has_header else None,
         names=None if has_header else COUNTER_COLUMNS,
     )
+
+
+PHASE_ORDER = [
+    "preflight_start", "preflight_end", "auth_start", "auth_end",
+    "join_start", "join_end", "passage_wait_start", "passage_ready",
+    "race_start_wait", "race_started", "typing_start", "race_ended",
+]
+PHASE_COLORS = plt.get_cmap("tab20").colors
+
+
+def phase_label(name):
+    return name.replace("_", " ").capitalize()
+
+
+def draw_phase_markers(ax, phase_values=None):
+    if phase_values is None:
+        phase_values = phases
+    entries = [(name, phase_values[name]) for name in PHASE_ORDER if name in phase_values]
+    entries.extend((name, value) for name, value in phase_values.items()
+                   if name not in PHASE_ORDER)
+    if not entries:
+        return
+
+    handles = []
+    for index, (name, value) in enumerate(entries):
+        color = PHASE_COLORS[index % len(PHASE_COLORS)]
+        ax.axvline(value, color=color, linestyle="--", alpha=0.8, linewidth=1)
+        handles.append(Line2D([0], [0], color=color, linestyle="--", linewidth=1.5,
+                              label=phase_label(name)))
+
+    ax.figure.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 0.01),
+                     ncol=6, frameon=False, fontsize=9, columnspacing=1.2,
+                     handlelength=1.6, handletextpad=0.5)
+
+
+def finish_figure(fig):
+    fig.tight_layout(rect=(0, 0.13, 1, 1))
 
 # =========================================================
 # CONFIG
@@ -101,13 +139,6 @@ if combined_mode:
         if vals:
             avg_phases[k] = sum(vals) / len(vals)
 
-    def draw_phase_markers_rel(ax):
-        ymax = ax.get_ylim()[1]
-        for name, sec in avg_phases.items():
-            ax.axvline(sec, color="red", linestyle="--", alpha=0.4, linewidth=1)
-            ax.text(sec, ymax, name, rotation=90,
-                    verticalalignment="top", fontsize=8, color="red")
-
     for graph_name, counter_name in METRICS.items():
         plt.figure(figsize=(12, 6))
         plotted = False
@@ -125,8 +156,8 @@ if combined_mode:
         plt.xlabel("Seconds since auth_start")
         plt.ylabel("MB" if graph_name == "memory" else "Value")
         plt.legend()
-        draw_phase_markers_rel(plt.gca())
-        plt.tight_layout()
+        draw_phase_markers(plt.gca(), avg_phases)
+        finish_figure(plt.gcf())
         out = f"{out_dir}/{graph_name}.png"
         plt.savefig(out)
         plt.close()
@@ -149,8 +180,8 @@ if combined_mode:
         plt.xlabel("Seconds since auth_start")
         plt.ylabel("RTT (ms)")
         plt.legend()
-        draw_phase_markers_rel(plt.gca())
-        plt.tight_layout()
+        draw_phase_markers(plt.gca(), avg_phases)
+        finish_figure(plt.gcf())
         out = f"{out_dir}/rtt_p95.png"
         plt.savefig(out)
         plt.close()
@@ -183,12 +214,6 @@ if PHASES_FILE and Path(PHASES_FILE).exists():
         rtt_df["t"] = pd.to_datetime(rtt_df["t"], utc=True)
         rtt_df = rtt_df.set_index("t").sort_index()
 
-
-def draw_phase_markers(ax):
-    for name, ts in phases.items():
-        ax.axvline(ts, color="red", linestyle="--", alpha=0.5, linewidth=1)
-        ax.text(ts, ax.get_ylim()[1], name, rotation=90,
-                verticalalignment="top", fontsize=8, color="red")
 
 # =========================================================
 # LOAD DATA
@@ -290,7 +315,7 @@ for graph_name, counter_name in metrics.items():
 
     plt.xticks(rotation=45)
 
-    plt.tight_layout()
+    finish_figure(plt.gcf())
 
     output_path = f"{OUTPUT_DIR}/{graph_name}.png"
 
@@ -337,7 +362,7 @@ ax.legend()
 draw_phase_markers(ax)
 
 plt.xticks(rotation=45)
-plt.tight_layout()
+finish_figure(plt.gcf())
 
 combined_path = f"{OUTPUT_DIR}/server_load_overview.png"
 
@@ -372,7 +397,7 @@ if memory_counter in pivot.columns:
 
     plt.xticks(rotation=45)
 
-    plt.tight_layout()
+    finish_figure(plt.gcf())
 
     mem_path = f"{OUTPUT_DIR}/memory_mb.png"
 
@@ -402,7 +427,7 @@ if rtt_df is not None and len(rtt_df) > 0:
     draw_phase_markers(plt.gca())
 
     plt.xticks(rotation=45)
-    plt.tight_layout()
+    finish_figure(plt.gcf())
 
     rtt_path = f"{OUTPUT_DIR}/rtt.png"
     plt.savefig(rtt_path)
